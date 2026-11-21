@@ -101,33 +101,31 @@ impl MatrixEffect {
     }
 
     /// Average the source image down to one brightness value per glyph cell.
-    fn cell_luma(&self, rgb: &[u8], sw: usize, sh: usize) -> Vec<f32> {
+    fn cell_luma(&self, luma: &[u8], sw: usize, sh: usize) -> Vec<f32> {
         let (cols, rows) = (self.cols, self.rows);
         let mut sum = vec![0u32; cols * rows];
         let mut cnt = vec![0u32; cols * rows];
         let step = (sw / (cols * 3)).max(1); // ~3 samples per cell per axis is plenty
         for y in (0..sh).step_by(step) {
             let r = y * rows / sh;
-            let line = &rgb[y * sw * 3..(y + 1) * sw * 3];
+            let line = &luma[y * sw..(y + 1) * sw];
             for x in (0..sw).step_by(step) {
-                let p = &line[x * 3..x * 3 + 3];
-                let l = (p[0] as u32 * 77 + p[1] as u32 * 150 + p[2] as u32 * 29) >> 8;
                 let i = r * cols + x * cols / sw;
-                sum[i] += l;
+                sum[i] += line[x] as u32;
                 cnt[i] += 1;
             }
         }
         sum.iter().zip(&cnt).map(|(&s, &c)| s as f32 / (c.max(1) as f32 * 255.0)).collect()
     }
 
-    /// Render one frame. `rgb` is the tightly packed source image (sw x sh),
-    /// `out` receives width*height*3 bytes of RGB.
-    pub fn render(&mut self, rgb: &[u8], sw: usize, sh: usize, dt: f32, out: &mut [u8]) {
+    /// Render one frame. `src` is the source image's brightness, one byte per
+    /// pixel (sw x sh); `out` receives width*height*3 bytes of RGB.
+    pub fn render(&mut self, src: &[u8], sw: usize, sh: usize, dt: f32, out: &mut [u8]) {
         let (cols, rows, cw, ch) = (self.cols, self.rows, self.cw, self.ch);
         let (gw, gh) = (cols * cw, rows * ch);
 
         // --- camera brightness per cell, auto-contrast, temporal smoothing ---
-        let mut luma = self.cell_luma(rgb, sw, sh);
+        let mut luma = self.cell_luma(src, sw, sh);
         let mut sorted = luma.clone();
         sorted.sort_by(|a, b| a.total_cmp(b));
         let lo = sorted[sorted.len() / 50];
