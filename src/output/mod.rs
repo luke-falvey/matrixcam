@@ -3,7 +3,7 @@
 #[cfg(target_os = "linux")]
 mod v4l2;
 #[cfg(windows)]
-mod obs_shm;
+pub mod mf_vcam;
 
 pub trait Sink {
     /// Human-readable device name, shown to the user.
@@ -17,7 +17,7 @@ pub fn open(width: usize, height: usize, fps: u32, device: Option<&str>) -> Resu
     #[cfg(target_os = "linux")]
     return v4l2::open(width, height, device);
     #[cfg(windows)]
-    return obs_shm::open(width, height, fps);
+    return mf_vcam::open(width, height, fps);
     #[cfg(not(any(target_os = "linux", windows)))]
     return Err("no virtual camera backend on this platform yet (see README); \
                 use the preview window instead"
@@ -26,7 +26,7 @@ pub fn open(width: usize, height: usize, fps: u32, device: Option<&str>) -> Resu
 
 /// BT.601 limited-range luma / chroma from 8-bit RGB.
 #[inline]
-#[allow(dead_code)]
+#[cfg(target_os = "linux")]
 fn yuv(r: u8, g: u8, b: u8) -> (u8, i32, i32) {
     let (r, g, b) = (r as i32, g as i32, b as i32);
     let y = (66 * r + 129 * g + 25 * b + 128 + (16 << 8)) >> 8;

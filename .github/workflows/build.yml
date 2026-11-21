@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -19,13 +20,53 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libxcursor-dev libclang-dev nasm
-      - if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libxcursor-dev libclang-dev
       - run: cargo build --release --locked
       - run: ./target/release/${{ matrix.bin }} --help
         shell: bash
+      - name: Render a test frame
+        shell: bash
+        run: ./target/release/${{ matrix.bin }} --image tests/face.jpg --snapshot rendered.png
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: target/release/${{ matrix.bin }}
+
+      # End-to-end check of the Windows virtual camera: start matrixcam feeding
+      # the camera, then read frames back from it the way Teams would.
+      - name: Virtual camera smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "target\release\matrixcam.exe"
+          # Server runners have no per-user camera consent; desktops default to allowed.
+          $consent = "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
+          reg add "HKLM\$consent" /v Value /d Allow /f | Out-Null
+          reg add "HKCU\$consent" /v Value /d Allow /f | Out-Null
+          reg add "HKCU\$consent\NonPackaged" /v Value /d Allow /f | Out-Null
+
+          & $exe --install-driver
+          if ($LASTEXITCODE -ne 0) { throw "driver install failed" }
+          New-Item -ItemType File -Force "$env:ProgramData\matrixcam\debug" | Out-Null
+          $feeder = Start-Process $exe -ArgumentList "--image","tests\face.jpg" -PassThru -NoNewWindow `
+            -RedirectStandardOutput feeder.out -RedirectStandardError feeder.err
+          Start-Sleep 10
+          $cameras = & $exe --list-cameras | Out-String
+          $cameras
+          $readback = & $exe --camera 0 --no-virtualcam --snapshot readback.png | Out-String
+          $readback
+          Stop-Process -Id $feeder.Id -ErrorAction SilentlyContinue
+          if ($cameras -notmatch "Matrix Cam") { throw "the virtual camera was not listed" }
+          if ($readback -notmatch "source frame: 1280x720, brightness (\d+)\.\.(\d+)") { throw "no frame was read back" }
+          if ([int]$Matches[2] - [int]$Matches[1] -lt 60) { throw "frames read back from the camera are blank" }
+          & $exe --uninstall-driver
+          if ($LASTEXITCODE -ne 0) { throw "driver uninstall failed" }
+      - name: Virtual camera diagnostics
+        if: runner.os == 'Windows' && failure()
+        shell: pwsh
+        run: |
+          "--- feeder output ---"; Get-Content feeder.out, feeder.err -ErrorAction SilentlyContinue
+          "--- camera component log ---"; Get-Content "$env:ProgramData\matrixcam\vcam.log" -ErrorAction SilentlyContinue
+          Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
+          Get-WinEvent -LogName "Microsoft-Windows-MF-FrameServer/Camera_FrameServer" -MaxEvents 30 -ErrorAction SilentlyContinue |
+            ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) [$($_.Id)] $($_.Message)" }

@@ -1,9 +1,13 @@
 [package]
 name = "matrixcam"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Turn your webcam into Matrix-style digital rain on a virtual camera"
 license = "MIT"
+
+[workspace]
+members = ["shared"]
+exclude = ["vcam"] # built separately by build.rs and embedded into the Windows exe
 
 [features]
 default = ["preview"]
@@ -15,13 +19,22 @@ ctrlc = "3"
 fastrand = "2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 minifb = { version = "0.29", optional = true }
-nokhwa = { version = "0.10", features = ["input-native"] }
+nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_Security"] }
+matrixcam-shared = { path = "shared" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+]
 
 [profile.release]
 opt-level = 3
