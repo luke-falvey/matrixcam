@@ -33,57 +33,40 @@ jobs:
           path: target/release/${{ matrix.bin }}
 
       # End-to-end check of the Windows virtual camera: start matrixcam feeding
-      # the camera, then read frames back from it like Teams would. Hosted
-      # runners are servers without a camera stack guarantee, so this reports
-      # rather than gates.
+      # the camera, then read frames back from it the way Teams would.
       - name: Virtual camera smoke test
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           $exe = "target\release\matrixcam.exe"
-          & $exe --install-driver
-          "install exit code: $LASTEXITCODE"
-          New-Item -ItemType File -Force "$env:ProgramData\matrixcam\debug" | Out-Null
-          Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
-          (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, BuildNumber | Out-String).Trim()
-          "--- camera privacy settings before ---"
+          # Server runners have no per-user camera consent; desktops default to allowed.
           $consent = "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
-          reg query "HKLM\$consent" /v Value 2>&1
-          reg query "HKCU\$consent" /v Value 2>&1
-          reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" 2>&1
           reg add "HKLM\$consent" /v Value /d Allow /f | Out-Null
           reg add "HKCU\$consent" /v Value /d Allow /f | Out-Null
           reg add "HKCU\$consent\NonPackaged" /v Value /d Allow /f | Out-Null
-          icacls "$env:ProgramFiles\matrixcam\matrixcam_vcam.dll"
+
+          & $exe --install-driver
+          if ($LASTEXITCODE -ne 0) { throw "driver install failed" }
+          New-Item -ItemType File -Force "$env:ProgramData\matrixcam\debug" | Out-Null
           $feeder = Start-Process $exe -ArgumentList "--image","tests\face.jpg" -PassThru -NoNewWindow `
             -RedirectStandardOutput feeder.out -RedirectStandardError feeder.err
           Start-Sleep 10
-          "--- cameras ---"
-          & $exe --list-cameras
-          "--- read back from the virtual camera ---"
-          & $exe --camera 0 --no-virtualcam --snapshot readback.png
-          "readback exit code: $LASTEXITCODE"
+          $cameras = & $exe --list-cameras | Out-String
+          $cameras
+          $readback = & $exe --camera 0 --no-virtualcam --snapshot readback.png | Out-String
+          $readback
           Stop-Process -Id $feeder.Id -ErrorAction SilentlyContinue
+          if ($cameras -notmatch "Matrix Cam") { throw "the virtual camera was not listed" }
+          if ($readback -notmatch "source frame: 1280x720, brightness (\d+)\.\.(\d+)") { throw "no frame was read back" }
+          if ([int]$Matches[2] - [int]$Matches[1] -lt 60) { throw "frames read back from the camera are blank" }
+          & $exe --uninstall-driver
+          if ($LASTEXITCODE -ne 0) { throw "driver uninstall failed" }
+      - name: Virtual camera diagnostics
+        if: runner.os == 'Windows' && failure()
+        shell: pwsh
+        run: |
           "--- feeder output ---"; Get-Content feeder.out, feeder.err -ErrorAction SilentlyContinue
           "--- camera component log ---"; Get-Content "$env:ProgramData\matrixcam\vcam.log" -ErrorAction SilentlyContinue
           Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
-          "--- camera related event logs ---"
-          Get-WinEvent -ListLog *FrameServer*, *Camera*, *MediaFoundation*, *MF-* -ErrorAction SilentlyContinue |
-            Where-Object RecordCount -gt 0 | ForEach-Object {
-              "## $($_.LogName) ($($_.RecordCount) records)"
-              Get-WinEvent -LogName $_.LogName -MaxEvents 15 -ErrorAction SilentlyContinue |
-                ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) [$($_.Id)] $($_.Message)" }
-            }
-          Get-WinEvent -FilterHashtable @{LogName='System','Application'; StartTime=(Get-Date).AddMinutes(-3)} -ErrorAction SilentlyContinue |
-            Where-Object { $_.Message -match 'FrameServer|Frame Server|camera|matrixcam' } |
-            ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) [$($_.ProviderName) $($_.Id)] $($_.Message)" }
-          if (!(Test-Path readback.png)) { exit 1 }
-      - if: runner.os == 'Windows' && always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-smoke-test
-          path: |
-            rendered.png
-            readback.png
-          if-no-files-found: ignore
+          Get-WinEvent -LogName "Microsoft-Windows-MF-FrameServer/Camera_FrameServer" -MaxEvents 30 -ErrorAction SilentlyContinue |
+            ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) [$($_.Id)] $($_.Message)" }

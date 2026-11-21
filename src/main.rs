@@ -258,6 +258,9 @@ fn run() -> Result<(), String> {
 
         if let Some(path) = &args.snapshot {
             if frames >= 60 {
+                // Lets a test confirm that real picture content arrived, not blank frames.
+                let (lo, hi) = (luma.iter().min().unwrap_or(&0), luma.iter().max().unwrap_or(&0));
+                println!("source frame: {sw}x{sh}, brightness {lo}..{hi}");
                 return image::save_buffer(path, &out, w as u32, h as u32, image::ColorType::Rgb8).map_err(|e| e.to_string());
             }
             continue;
