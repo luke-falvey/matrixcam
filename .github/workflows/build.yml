@@ -46,6 +46,16 @@ jobs:
           "install exit code: $LASTEXITCODE"
           New-Item -ItemType File -Force "$env:ProgramData\matrixcam\debug" | Out-Null
           Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
+          (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, BuildNumber | Out-String).Trim()
+          "--- camera privacy settings before ---"
+          $consent = "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
+          reg query "HKLM\$consent" /v Value 2>&1
+          reg query "HKCU\$consent" /v Value 2>&1
+          reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" 2>&1
+          reg add "HKLM\$consent" /v Value /d Allow /f | Out-Null
+          reg add "HKCU\$consent" /v Value /d Allow /f | Out-Null
+          reg add "HKCU\$consent\NonPackaged" /v Value /d Allow /f | Out-Null
+          icacls "$env:ProgramFiles\matrixcam\matrixcam_vcam.dll"
           $feeder = Start-Process $exe -ArgumentList "--image","tests\face.jpg" -PassThru -NoNewWindow `
             -RedirectStandardOutput feeder.out -RedirectStandardError feeder.err
           Start-Sleep 10
@@ -57,6 +67,17 @@ jobs:
           Stop-Process -Id $feeder.Id -ErrorAction SilentlyContinue
           "--- feeder output ---"; Get-Content feeder.out, feeder.err -ErrorAction SilentlyContinue
           "--- camera component log ---"; Get-Content "$env:ProgramData\matrixcam\vcam.log" -ErrorAction SilentlyContinue
+          Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
+          "--- camera related event logs ---"
+          Get-WinEvent -ListLog *FrameServer*, *Camera*, *MediaFoundation*, *MF-* -ErrorAction SilentlyContinue |
+            Where-Object RecordCount -gt 0 | ForEach-Object {
+              "## $($_.LogName) ($($_.RecordCount) records)"
+              Get-WinEvent -LogName $_.LogName -MaxEvents 15 -ErrorAction SilentlyContinue |
+                ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) [$($_.Id)] $($_.Message)" }
+            }
+          Get-WinEvent -FilterHashtable @{LogName='System','Application'; StartTime=(Get-Date).AddMinutes(-3)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'FrameServer|Frame Server|camera|matrixcam' } |
+            ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) [$($_.ProviderName) $($_.Id)] $($_.Message)" }
           if (!(Test-Path readback.png)) { exit 1 }
       - if: runner.os == 'Windows' && always()
         uses: actions/upload-artifact@v4

@@ -76,7 +76,7 @@ pub extern "system" fn DllGetClassObject(rclsid: *const GUID, riid: *const GUID,
         if *rclsid != CLSID_MATRIXCAM {
             return CLASS_E_CLASSNOTAVAILABLE;
         }
-        log!("DllGetClassObject");
+        log!("DllGetClassObject in {:?}", std::env::current_exe().unwrap_or_default());
         let factory: IClassFactory = ClassFactory.into();
         factory.query(riid, ppv)
     }
